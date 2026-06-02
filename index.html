@@ -2046,9 +2046,33 @@ function saveJadwalDay(){
 // ─────────────────────────────────────────────────────────
 function exportExcel(){
   var list=getPesananFiltered();if(list.length===0){showToast('Tidak ada data untuk di-export');return;}
-  var rows=[['No','Karyawan','Menu','Qty','Harga','Ditanggung','Over Budget','Status','Tanggal','Waktu','Catatan']];
-  list.sort(function(a,b){return a.tanggal>b.tanggal?1:-1;}).forEach(function(p,i){rows.push([i+1,p.karyawan,p.menu,p.qty,p.harga,p.beban,p.selisih||0,p.status,p.tanggal,p.waktu||'',p.catatan||'']);});
-  var tB=list.reduce(function(a,p){return a+p.beban;},0);var tO=list.reduce(function(a,p){return a+(p.selisih||0);},0);
+  // Rekalkukasi beban sama persis dengan dashboard
+  var _byKidDate={};
+  list.forEach(function(p){
+    var kidKey=(p.kid&&p.kid!=='')?p.kid:(p.karyawan+'_'+p.tanggal);
+    var key=kidKey+'|'+p.tanggal;
+    if(!_byKidDate[key])_byKidDate[key]=[];
+    _byKidDate[key].push(p);
+  });
+  Object.keys(_byKidDate).forEach(function(key){
+    var group=_byKidDate[key];
+    var totalGroup=group.reduce(function(a,x){return a+(Number(x.harga)||0);},0);
+    var bebanGroup=Math.min(totalGroup,BUDGET);
+    var sisaBeban=bebanGroup;
+    group.forEach(function(p,i){
+      var isLast=i===group.length-1;
+      var beban=isLast?sisaBeban:Math.round(bebanGroup*(p.harga/totalGroup));
+      sisaBeban-=beban;
+      p._bebanCalc=beban;
+      p._selisihCalc=Math.max(0,(Number(p.harga)||0)-beban);
+    });
+  });
+  var rows=[['No','Karyawan','Menu','Qty','Harga','Ditanggung Kantor','Over Budget','Status','Tanggal','Waktu','Catatan']];
+  list.sort(function(a,b){return a.tanggal>b.tanggal?1:-1;}).forEach(function(p,i){
+    rows.push([i+1,p.karyawan,p.menu,p.qty,p.harga,p._bebanCalc,p._selisihCalc,p.status,p.tanggal,p.waktu||'',p.catatan||'']);
+  });
+  var tB=list.reduce(function(a,p){return a+(p._bebanCalc||0);},0);
+  var tO=list.reduce(function(a,p){return a+(p._selisihCalc||0);},0);
   rows.push([]);rows.push(['','','','','TOTAL',tB,tO,'','','','']);
   var csv=rows.map(function(r){return r.map(function(c){return'"'+String(c).replace(/"/g,'""')+'"';}).join(',');}).join('\n');
   var blob=new Blob(['\uFEFF'+csv],{type:'text/csv;charset=utf-8;'});
@@ -2062,31 +2086,40 @@ function exportExcel(){
 // ─────────────────────────────────────────────────────────
 function exportPDF(){
   var list=getPesananFiltered();if(list.length===0){showToast('Tidak ada data untuk di-export');return;}
-  // Kalkulasi pakai logika kumulatif per kid+hari (sama dengan dashboard)
-  var _pdfByKidDate={};
+  // Rekalkukasi beban sama persis dengan dashboard
+  var _byKidDate={};
   list.forEach(function(p){
-    var key=p.kid+'|'+p.tanggal;
-    if(!_pdfByKidDate[key])_pdfByKidDate[key]={total:0,lunas:0};
-    _pdfByKidDate[key].total+=p.harga;
-    if(p._lunas)_pdfByKidDate[key].lunas+=p.harga;
+    var kidKey=(p.kid&&p.kid!=='')?p.kid:(p.karyawan+'_'+p.tanggal);
+    var key=kidKey+'|'+p.tanggal;
+    if(!_byKidDate[key])_byKidDate[key]=[];
+    _byKidDate[key].push(p);
   });
-  var tB=Object.values(_pdfByKidDate).reduce(function(a,d){return a+Math.min(d.total,BUDGET);},0);
-  var tO=Object.values(_pdfByKidDate).reduce(function(a,d){
-    var overTotal=Math.max(0,d.total-BUDGET);
-    var overBayar=Math.max(0,d.lunas-BUDGET);
-    return a+Math.max(0,overTotal-overBayar);
-  },0);
+  Object.keys(_byKidDate).forEach(function(key){
+    var group=_byKidDate[key];
+    var totalGroup=group.reduce(function(a,x){return a+(Number(x.harga)||0);},0);
+    var bebanGroup=Math.min(totalGroup,BUDGET);
+    var sisaBeban=bebanGroup;
+    group.forEach(function(p,i){
+      var isLast=i===group.length-1;
+      var beban=isLast?sisaBeban:Math.round(bebanGroup*(p.harga/totalGroup));
+      sisaBeban-=beban;
+      p._bebanCalc=beban;
+      p._selisihCalc=Math.max(0,(Number(p.harga)||0)-beban);
+    });
+  });
+  var tB=list.reduce(function(a,p){return a+(p._bebanCalc||0);},0);
+  var tO=list.reduce(function(a,p){return a+(p._selisihCalc||0);},0);
   var sorted=list.sort(function(a,b){return a.tanggal>b.tanggal?1:-1;});
   var rows=sorted.map(function(p,i){
     var overCell;
-    if(p.selisih>0&&p._lunas){
-      overCell='<span style="color:#1DBF73;font-weight:700">✓ Lunas</span><br><span style="color:#9CA3AF;font-size:10px;text-decoration:line-through">+Rp '+p.selisih.toLocaleString('id')+'</span>';
-    } else if(p.selisih>0){
-      overCell='<span style="color:#E53935;font-weight:700">+Rp '+p.selisih.toLocaleString('id')+'</span>';
+    if(p._selisihCalc>0&&p._lunas){
+      overCell='<span style="color:#1DBF73;font-weight:700">✓ Lunas</span><br><span style="color:#9CA3AF;font-size:10px;text-decoration:line-through">+Rp '+p._selisihCalc.toLocaleString('id')+'</span>';
+    } else if(p._selisihCalc>0){
+      overCell='<span style="color:#E53935;font-weight:700">+Rp '+p._selisihCalc.toLocaleString('id')+'</span>';
     } else {
       overCell='<span style="color:#9CA3AF">-</span>';
     }
-    return'<tr style="border-bottom:1px solid #eee;'+(i%2===0?'background:#fafafa':'')+'"><td style="padding:7px 8px">'+(i+1)+'</td><td style="padding:7px 8px;font-weight:600">'+p.karyawan+'</td><td style="padding:7px 8px">'+p.menu+(p.qty>1?' ×'+p.qty:'')+'</td><td style="padding:7px 8px;color:#FF6B35;font-weight:700">Rp '+p.harga.toLocaleString('id')+'</td><td style="padding:7px 8px;color:#1DBF73;font-weight:700">Rp '+p.beban.toLocaleString('id')+'</td><td style="padding:7px 8px">'+overCell+'</td><td style="padding:7px 8px"><span style="background:'+(p.status==='Selesai'?'#E6F9F0':p.status==='Diproses'?'#E3F2FD':'#FFFBEB')+';color:'+(p.status==='Selesai'?'#166534':p.status==='Diproses'?'#1565C0':'#B45309')+';padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">'+p.status+'</span></td><td style="padding:7px 8px;color:#6B7280;font-size:11px">'+fmtDate(p.tanggal)+'</td></tr>';
+    return'<tr style="border-bottom:1px solid #eee;'+(i%2===0?'background:#fafafa':'')+'"><td style="padding:7px 8px">'+(i+1)+'</td><td style="padding:7px 8px;font-weight:600">'+p.karyawan+'</td><td style="padding:7px 8px">'+p.menu+(p.qty>1?' ×'+p.qty:'')+'</td><td style="padding:7px 8px;color:#FF6B35;font-weight:700">Rp '+p.harga.toLocaleString('id')+'</td><td style="padding:7px 8px;color:#1DBF73;font-weight:700">Rp '+(p._bebanCalc||0).toLocaleString('id')+'</td><td style="padding:7px 8px">'+overCell+'</td><td style="padding:7px 8px"><span style="background:'+(p.status==='Selesai'?'#E6F9F0':p.status==='Diproses'?'#E3F2FD':'#FFFBEB')+';color:'+(p.status==='Selesai'?'#166534':p.status==='Diproses'?'#1565C0':'#B45309')+';padding:2px 8px;border-radius:99px;font-size:11px;font-weight:700">'+p.status+'</span></td><td style="padding:7px 8px;color:#6B7280;font-size:11px">'+fmtDate(p.tanggal)+'</td></tr>';
   }).join('');
   var html='<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Rekap MakanYuk</title></head><body style="font-family:Arial,sans-serif;margin:20px;color:#111">'
     +'<div style="background:linear-gradient(135deg,#FF6B35,#FF8C42);padding:20px;border-radius:12px;margin-bottom:16px"><div style="font-size:24px;font-weight:900;color:#fff">🍱 MakanYuk — Rekap Makan Siang</div><div style="font-size:12px;color:rgba(255,255,255,.8);margin-top:4px">Dicetak: '+new Date().toLocaleString('id-ID')+'</div></div>'
@@ -2525,14 +2558,15 @@ function buildRincianHariPerKaryawan(pesananTgl){
 function downloadTagihanCSV(){
   var pesanan=cache.pesanan.slice();
   if(pesanan.length===0){showToast('Tidak ada data pesanan');return;}
-  // Sanitize
+  // Sanitize + filter data rusak
   pesanan=pesanan.map(function(p){
     return Object.assign({},p,{
       harga:Number(p.harga)||0,beban:Number(p.beban)||0,selisih:Number(p.selisih)||0,
       qty:Number(p.qty)||1,karyawan:p.karyawan||'-',menu:p.menu||'-',
       status:p.status||'-',waktu:p.waktu||'-',catatan:p.catatan||'',tanggal:p.tanggal||today()
     });
-  });
+  }).filter(function(p){return p.karyawan&&p.karyawan!=='-'&&!(p.harga===0&&p.menu==='-');});
+
   var byDate={};
   pesanan.forEach(function(p){if(!byDate[p.tanggal])byDate[p.tanggal]=[];byDate[p.tanggal].push(p);});
   var dates=Object.keys(byDate).sort();
@@ -2591,10 +2625,8 @@ function downloadTagihanPDF(){
     _tagihanByKidDate[key].total+=p.harga;
     if(p._lunas)_tagihanByKidDate[key].lunas+=p.harga;
   });
-  var totalBebanAll=Object.values(_tagihanByKidDate).reduce(function(a,d){return a+Math.min(d.total,BUDGET);},0);
-  var totalOverAll=Object.values(_tagihanByKidDate).reduce(function(a,d){
-    return a+Math.max(0,Math.max(0,d.total-BUDGET)-Math.max(0,d.lunas-BUDGET));
-  },0);
+  var totalBebanAll=pesanan.reduce(function(a,p){return a+p.beban;},0);
+  var totalOverAll=pesanan.reduce(function(a,p){return a+(p.selisih||0);},0);
 
   // Rincian per hari
   var hariBlocks=dates.map(function(tgl){
